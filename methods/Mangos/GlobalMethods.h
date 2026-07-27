@@ -1464,6 +1464,9 @@ namespace LuaGlobalFunctions
         float o = E->CHECKVAL<float>(8);
         bool save = E->CHECKVAL<bool>(9, false);
         uint32 durorresptime = E->CHECKVAL<uint32>(10, 0);
+        // arg 12 (gameobjects only, read below after phase): send the create
+        // block as UPDATETYPE_CREATE_OBJECT2 so 3.3.5 clients render the
+        // spawn instantly instead of alpha-fading it in (GOC staging ghost)
 #if (!defined(TBC) && !defined(CLASSIC))
         uint32 phase = E->CHECKVAL<uint32>(11, PHASEMASK_NORMAL);
         if (!phase)
@@ -1627,6 +1630,30 @@ namespace LuaGlobalFunctions
 
                 // DEBUG_LOG(GetMangosString(LANG_GAMEOBJECT_CURRENT), gInfo->name, db_lowGUID, x, y, z, o);
 
+                if (E->CHECKVAL<bool>(12, false))
+                    pGameObj->SetForceCreateObject2(true);
+
+                // Bake full rotation + scale into the create block (see the
+                // matching comment in the non-save branch above). Args 13-16
+                // = quaternion x,y,z,w; arg 17 = scale (all optional).
+                {
+                    float qx = E->CHECKVAL<float>(13, 0.0f);
+                    float qy = E->CHECKVAL<float>(14, 0.0f);
+                    float qz = E->CHECKVAL<float>(15, 0.0f);
+                    float qw = E->CHECKVAL<float>(16, 0.0f);
+                    if (qx != 0.0f || qy != 0.0f || qz != 0.0f || qw != 0.0f)
+                    {
+                        // see the non-save branch: write rotation fields directly
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 0, qx);
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 1, qy);
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 2, qz);
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 3, qw);
+                    }
+                    float gscale = E->CHECKVAL<float>(17, 0.0f);
+                    if (gscale > 0.0f)
+                        pGameObj->SetObjectScale(gscale);
+                }
+
                 map->Add(pGameObj);
                 pGameObj->AIM_Initialize();
 
@@ -1650,6 +1677,41 @@ namespace LuaGlobalFunctions
                 }
 
                 pGameObj->SetRespawnTime(durorresptime / IN_MILLISECONDS);
+
+                if (E->CHECKVAL<bool>(12, false))
+                    pGameObj->SetForceCreateObject2(true);
+
+                // Bake the full 3-axis rotation + scale into the object
+                // BEFORE map->Add sends its create block. 3.3.5 clients read
+                // GO rotation only from the create (movement block packed
+                // quaternion) and never re-apply it from a later value update
+                // or a destroy+recreate of an object they already know - so
+                // GameObject:Refresh() shows scale but NOT rotation, and the
+                // rotation only appeared after a relog (a genuinely fresh
+                // create). Baking it here makes every spawn render like that
+                // fresh create. Args 13-16 = quaternion x,y,z,w; arg 17 =
+                // scale (all optional; 0 = leave Create's yaw-from-orientation
+                // and the template scale untouched).
+                {
+                    float qx = E->CHECKVAL<float>(13, 0.0f);
+                    float qy = E->CHECKVAL<float>(14, 0.0f);
+                    float qz = E->CHECKVAL<float>(15, 0.0f);
+                    float qw = E->CHECKVAL<float>(16, 0.0f);
+                    if (qx != 0.0f || qy != 0.0f || qz != 0.0f || qw != 0.0f)
+                    {
+                        // Write the 4 rotation fields directly (GetPackedRotation
+                        // reads these at create time). Avoids constructing a
+                        // G3D::Quat, whose full type isn't in this TU. The lua
+                        // (quatFromEuler) already sends a unit quaternion.
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 0, qx);
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 1, qy);
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 2, qz);
+                        pGameObj->SetFloatValue(GAMEOBJECT_ROTATION + 3, qw);
+                    }
+                    float gscale = E->CHECKVAL<float>(17, 0.0f);
+                    if (gscale > 0.0f)
+                        pGameObj->SetObjectScale(gscale);
+                }
 
                 map->Add(pGameObj);
                 pGameObj->AIM_Initialize();
@@ -2366,6 +2428,142 @@ namespace LuaGlobalFunctions
     }
 
     /**
+     * Clones a source [Item] template's stats/model into a RESERVED destination entry's
+     * in-memory prototype (both must already be loaded). Lets the GM Assistant mint custom
+     * items from a pre-seeded reserved pool with no server restart. Shallow copy: name and
+     * description strings are shared read-only until SetItemProtoName is called.
+     *
+     * @param uint32 destEntry : a reserved item_template entry (must be loaded)
+     * @param uint32 srcEntry : the item to clone
+     * @return bool ok
+     */
+    int CopyItemProto(Eluna* E)
+    {
+        uint32 dest = E->CHECKVAL<uint32>(1);
+        uint32 src  = E->CHECKVAL<uint32>(2);
+        ItemPrototype* d = const_cast<ItemPrototype*>(eObjectMgr->GetItemPrototype(dest));
+        ItemPrototype const* s = eObjectMgr->GetItemPrototype(src);
+        if (!d || !s)
+        {
+            E->Push(false);
+            return 1;
+        }
+        *d = *s;              // shallow struct copy (Name1/Description shared read-only)
+        d->ItemId = dest;     // restore identity
+        E->Push(true);
+        return 1;
+    }
+
+    /**
+     * Sets one stat slot (0-based) on a loaded [Item] template's in-memory prototype.
+     * statType is an ITEM_MOD_* value (4=STR, 3=AGI, 5=INT, 7=STA, 6=SPI, 32=CRIT,
+     * 36=HASTE, 38=ATTACK_POWER, 45=SPELL_POWER, ...). StatsCount grows to cover the slot.
+     *
+     * @param uint32 entry
+     * @param uint32 slot : 0..9
+     * @param uint32 statType
+     * @param int32 statValue
+     * @return bool ok
+     */
+    int SetItemProtoStat(Eluna* E)
+    {
+        uint32 entry = E->CHECKVAL<uint32>(1);
+        uint32 slot  = E->CHECKVAL<uint32>(2);
+        uint32 type  = E->CHECKVAL<uint32>(3);
+        int32  value = E->CHECKVAL<int32>(4);
+        ItemPrototype* p = const_cast<ItemPrototype*>(eObjectMgr->GetItemPrototype(entry));
+        if (!p || slot >= MAX_ITEM_PROTO_STATS)
+        {
+            E->Push(false);
+            return 1;
+        }
+        p->ItemStat[slot].ItemStatType  = type;
+        p->ItemStat[slot].ItemStatValue = value;
+        if (slot + 1 > p->StatsCount)
+            p->StatsCount = slot + 1;
+        E->Push(true);
+        return 1;
+    }
+
+    /**
+     * Sets a whitelisted scalar field on a loaded [Item] template's in-memory prototype.
+     * field in: quality, itemlevel, requiredlevel, class, subclass, inventorytype, armor,
+     * delay, statscount, displayid, bonding, sheath, material, dmg_min, dmg_max, buyprice,
+     * sellprice, maxdurability, allowableclass.
+     *
+     * @param uint32 entry
+     * @param string field
+     * @param double value
+     * @return bool ok
+     */
+    int SetItemProtoField(Eluna* E)
+    {
+        uint32 entry = E->CHECKVAL<uint32>(1);
+        std::string f = E->CHECKVAL<std::string>(2);
+        double value  = E->CHECKVAL<double>(3);
+        ItemPrototype* p = const_cast<ItemPrototype*>(eObjectMgr->GetItemPrototype(entry));
+        if (!p)
+        {
+            E->Push(false);
+            return 1;
+        }
+        uint32 v = uint32(value);
+        if      (f == "quality")        p->Quality = v;
+        else if (f == "itemlevel")      p->ItemLevel = v;
+        else if (f == "requiredlevel")  p->RequiredLevel = v;
+        else if (f == "class")          p->Class = v;
+        else if (f == "subclass")       p->SubClass = v;
+        else if (f == "inventorytype")  p->InventoryType = v;
+        else if (f == "armor")          p->Armor = v;
+        else if (f == "delay")          p->Delay = v;
+        else if (f == "statscount")     p->StatsCount = (v <= MAX_ITEM_PROTO_STATS ? v : MAX_ITEM_PROTO_STATS);
+        else if (f == "displayid")      p->DisplayInfoID = v;
+        else if (f == "bonding")        p->Bonding = v;
+        else if (f == "sheath")         p->Sheath = v;
+        else if (f == "material")       p->Material = int32(value);
+        else if (f == "dmg_min")        p->Damage[0].DamageMin = float(value);
+        else if (f == "dmg_max")        p->Damage[0].DamageMax = float(value);
+        else if (f == "buyprice")       p->BuyPrice = v;
+        else if (f == "sellprice")      p->SellPrice = v;
+        else if (f == "maxdurability")  p->MaxDurability = v;
+        else if (f == "allowableclass") p->AllowableClass = int32(value);
+        else
+        {
+            E->Push(false);
+            return 1;
+        }
+        E->Push(true);
+        return 1;
+    }
+
+    /**
+     * Sets the display name of a loaded [Item] template's in-memory prototype. The name is
+     * heap-allocated (a small persistent leak, acceptable for a reserved custom-item pool).
+     *
+     * @param uint32 entry
+     * @param string name
+     * @return bool ok
+     */
+    int SetItemProtoName(Eluna* E)
+    {
+        uint32 entry = E->CHECKVAL<uint32>(1);
+        std::string name = E->CHECKVAL<std::string>(2);
+        ItemPrototype* p = const_cast<ItemPrototype*>(eObjectMgr->GetItemPrototype(entry));
+        if (!p)
+        {
+            E->Push(false);
+            return 1;
+        }
+        size_t n = name.size();
+        char* buf = new char[n + 1];
+        for (size_t i = 0; i <= n; ++i)
+            buf[i] = name.c_str()[i];
+        p->Name1 = buf;
+        E->Push(true);
+        return 1;
+    }
+
+    /**
      * Returns an object representing a `long long` (64-bit) value.
      *
      * The value by default is 0, but can be initialized to a value by passing a number or long long as a string.
@@ -3070,6 +3268,12 @@ namespace LuaGlobalFunctions
         { "CreateUint64", &LuaGlobalFunctions::CreateULongLong },
         { "StartGameEvent", &LuaGlobalFunctions::StartGameEvent },
         { "StopGameEvent", &LuaGlobalFunctions::StopGameEvent },
+
+        // GM Assistant: in-memory custom-item minting from a reserved item pool
+        { "CopyItemProto", &LuaGlobalFunctions::CopyItemProto },
+        { "SetItemProtoStat", &LuaGlobalFunctions::SetItemProtoStat },
+        { "SetItemProtoField", &LuaGlobalFunctions::SetItemProtoField },
+        { "SetItemProtoName", &LuaGlobalFunctions::SetItemProtoName },
 
         // unimplemented
         { "WorldDBQueryAsync", METHOD_REG_NONE },

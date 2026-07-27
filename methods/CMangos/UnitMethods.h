@@ -1930,6 +1930,38 @@ namespace LuaUnit
         return 0;
     }
 
+    /**
+     * Moves the [Unit] on a raw spline to the coordinates while HOLDING a
+     * fixed facing angle - stock point movement turns the unit to face its
+     * travel direction. Custom method (this fork, mirror of the compiled
+     * methods/Mangos copy): the GOC placement ghost's smooth glide.
+     *
+     * @param float x
+     * @param float y
+     * @param float z
+     * @param float o : facing angle to hold, radians
+     * @param float velocity = 0 : yards/second; 0 = the unit's run speed
+     */
+    int MoveToFacing(Eluna* E, Unit* unit)
+    {
+        float x = E->CHECKVAL<float>(2);
+        float y = E->CHECKVAL<float>(3);
+        float z = E->CHECKVAL<float>(4);
+        float o = E->CHECKVAL<float>(5);
+        float velocity = E->CHECKVAL<float>(6, 0.0f);
+
+        Movement::MoveSplineInit init(*unit);
+        init.MoveTo(x, y, z, false, false);
+        init.SetFacing(o);
+        init.SetWalk(false);
+        if (velocity > 0.01f)
+        {
+            init.SetVelocity(velocity);
+        }
+        init.Launch();
+        return 0;
+    }
+
 #if ELUNA_EXPANSION >= EXP_WOTLK
     /**
      * Makes the [Unit] jump to the coordinates
@@ -2622,6 +2654,7 @@ namespace LuaUnit
         { "MoveConfused", &LuaUnit::MoveConfused },
         { "MoveFleeing", &LuaUnit::MoveFleeing },
         { "MoveTo", &LuaUnit::MoveTo },
+        { "MoveToFacing", &LuaUnit::MoveToFacing },
         { "MoveStop", &LuaUnit::MoveStop },
         { "MoveExpire", &LuaUnit::MoveExpire },
         { "MoveClear", &LuaUnit::MoveClear },

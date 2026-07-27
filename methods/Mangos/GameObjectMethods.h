@@ -307,7 +307,118 @@ namespace LuaGameObject
         go->SetRespawnTime(respawn);
         return 0;
     }
-    
+
+    /**
+     * Re-sends this [GameObject]'s create block (destroy + create) to every
+     * player that currently sees it.
+     *
+     * 3.3.5 clients never re-render an already-instantiated gameobject from
+     * value updates - rotation and scale only take effect at create time -
+     * so call this after writing transform fields (GAMEOBJECT_ROTATION,
+     * OBJECT_FIELD_SCALE_X) to make the change visible in place.
+     */
+    int Refresh(Eluna* /*E*/, GameObject* go)
+    {
+        // guard: calling this on an object that is still being ADDED to the
+        // map (e.g. from an ON_SPAWN hook during grid load at player login)
+        // sends packets to mid-login sessions and segfaults the world
+        if (!go->IsInWorld())
+        {
+            return 0;
+        }
+        Map::PlayerList const& players = go->GetMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            if (Player* player = itr->getSource())
+            {
+                if (player->HaveAtClient(go))
+                {
+                    go->DestroyForPlayer(player);
+                    go->SendCreateUpdateToPlayer(player);
+                }
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Removes this [GameObject] from the world WITHOUT the client-side
+     * despawn animation.
+     *
+     * [GameObject:RemoveFromWorld] routes through GameObject::Delete(),
+     * which always broadcasts SMSG_GAMEOBJECT_DESPAWN_ANIM - a visible
+     * fade-out. For fast remove+respawn cycles (the GOCatalog staging
+     * ghost) that fade reads as a blink, so this does the same teardown
+     * silently. Temp spawns only: it skips the pool bookkeeping that
+     * GameObject::Delete() performs for pooled DB spawns.
+     */
+    int Vanish(Eluna* E, GameObject* go)
+    {
+        ObjectGuid ownerGuid = go->GetOwnerGuid();
+
+        if (ownerGuid)
+        {
+            Unit* owner = eObjectAccessor()GetUnit(*go, ownerGuid);
+            if (!owner || !ownerGuid.IsPlayer())
+                return 0;
+
+            owner->RemoveGameObject(go, false);
+        }
+
+        go->SetRespawnTime(0);
+        go->SetGoState(GO_STATE_READY);
+        go->SetUInt32Value(GAMEOBJECT_FLAGS, go->GetGOInfo()->flags);
+        go->AddObjectToRemoveList();
+
+        E->CHECKOBJ<ElunaObject>(1)->Invalidate();
+        return 0;
+    }
+
+    /**
+     * Moves this [GameObject] server-side to (x, y, z, o) and returns true,
+     * or returns false without moving if the destination lies in a different
+     * grid CELL (or the object is not in world).
+     *
+     * Same-cell only ON PURPOSE: within one cell the grid registration and
+     * viewer visibility are untouched, so a bare Relocate is safe - no
+     * cell/grid surgery. Callers pair it with [GameObject:Refresh] (3.3.5
+     * clients only read GO position from the create block) and fall back to
+     * a remove+respawn when this returns false (cell-boundary crossings).
+     * Built for the GOCatalog staging ghost: one persistent object gliding
+     * with the GM instead of a new spawn every tick.
+     *
+     * @param float x
+     * @param float y
+     * @param float z
+     * @param float o : orientation (yaw baked into the create block)
+     * @return bool moved
+     */
+    int SetWorldPosition(Eluna* E, GameObject* go)
+    {
+        float x = E->CHECKVAL<float>(2);
+        float y = E->CHECKVAL<float>(3);
+        float z = E->CHECKVAL<float>(4);
+        float o = E->CHECKVAL<float>(5);
+
+        if (!go->IsInWorld())
+        {
+            E->Push(false);
+            return 1;
+        }
+
+        CellPair oldCell = MaNGOS::ComputeCellPair(go->GetPositionX(), go->GetPositionY());
+        CellPair newCell = MaNGOS::ComputeCellPair(x, y);
+        if (oldCell.x_coord != newCell.x_coord || oldCell.y_coord != newCell.y_coord)
+        {
+            E->Push(false);
+            return 1;
+        }
+
+        go->Relocate(x, y, z, o);
+        E->Push(true);
+        return 1;
+    }
+
     ElunaRegister<GameObject> GameObjectMethods[] =
     {
         // Getters
@@ -334,6 +445,9 @@ namespace LuaGameObject
         { "UseDoorOrButton", &LuaGameObject::UseDoorOrButton },
         { "Despawn", &LuaGameObject::Despawn },
         { "Respawn", &LuaGameObject::Respawn },
+        { "Refresh", &LuaGameObject::Refresh },
+        { "Vanish", &LuaGameObject::Vanish },
+        { "SetWorldPosition", &LuaGameObject::SetWorldPosition },
         { "SaveToDB", &LuaGameObject::SaveToDB },
 
         // Not implemented methods

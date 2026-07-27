@@ -7,6 +7,8 @@
 #ifndef UNITMETHODS_H
 #define UNITMETHODS_H
 
+#include "movement/MoveSplineInit.h"
+
 /***
  * Inherits all methods from: [Object], [WorldObject]
  */
@@ -1693,6 +1695,22 @@ namespace LuaUnit
     }
 
     /**
+     * Sets whether the [Unit] can fly (client-side flight toggle, as used by `.gm fly`).
+     *
+     * Calls the virtual Unit::SetCanFly, which on a [Player] sends
+     * SMSG_MOVE_SET_CAN_FLY / SMSG_MOVE_UNSET_CAN_FLY plus the movement broadcast.
+     *
+     * @param bool apply = true : true to allow flight, false to disable
+     */
+    int SetCanFly(Eluna* E, Unit* unit)
+    {
+        bool apply = E->CHECKVAL<bool>(2, true);
+
+        unit->SetCanFly(apply);
+        return 0;
+    }
+
+    /**
      * Makes the [Unit] perform the given emote.
      *
      * @param uint32 emoteId
@@ -1912,6 +1930,38 @@ namespace LuaUnit
         bool genPath = E->CHECKVAL<bool>(6, true);
 
         unit->GetMotionMaster()->MovePoint(id, x, y, z, genPath);
+        return 0;
+    }
+
+    /**
+     * Moves the [Unit] on a raw spline to the coordinates while HOLDING a
+     * fixed facing angle - stock point movement turns the unit to face its
+     * travel direction. Custom method (this fork): the GOC placement
+     * ghost's smooth glide with the staged yaw kept.
+     *
+     * @param float x
+     * @param float y
+     * @param float z
+     * @param float o : facing angle to hold, radians
+     * @param float velocity = 0 : yards/second; 0 = the unit's run speed
+     */
+    int MoveToFacing(Eluna* E, Unit* unit)
+    {
+        float x = E->CHECKVAL<float>(2);
+        float y = E->CHECKVAL<float>(3);
+        float z = E->CHECKVAL<float>(4);
+        float o = E->CHECKVAL<float>(5);
+        float velocity = E->CHECKVAL<float>(6, 0.0f);
+
+        Movement::MoveSplineInit init(*unit);
+        init.MoveTo(x, y, z, false, false);
+        init.SetFacing(o);
+        init.SetWalk(false);
+        if (velocity > 0.01f)
+        {
+            init.SetVelocity(velocity);
+        }
+        init.Launch();
         return 0;
     }
 
@@ -2656,6 +2706,7 @@ namespace LuaUnit
         { "MoveConfused", &LuaUnit::MoveConfused },
         { "MoveFleeing", &LuaUnit::MoveFleeing },
         { "MoveTo", &LuaUnit::MoveTo },
+        { "MoveToFacing", &LuaUnit::MoveToFacing },
         { "MoveStop", &LuaUnit::MoveStop },
         { "MoveExpire", &LuaUnit::MoveExpire },
         { "MoveClear", &LuaUnit::MoveClear },
@@ -2678,7 +2729,7 @@ namespace LuaUnit
         // Not implemented mehtods
         { "GetVehicle", METHOD_REG_NONE }, // not implemented
         { "SetStunned", METHOD_REG_NONE }, // not implemented
-        { "SetCanFly", METHOD_REG_NONE }, // not implemented
+        { "SetCanFly", &LuaUnit::SetCanFly },
         { "SetVisible", METHOD_REG_NONE }, // not implemented
         { "IsVisible", METHOD_REG_NONE }, // not implemented,
         { "IsMoving", METHOD_REG_NONE }, // not implemented
