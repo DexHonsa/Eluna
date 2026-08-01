@@ -2489,7 +2489,7 @@ namespace LuaGlobalFunctions
      * Sets a whitelisted scalar field on a loaded [Item] template's in-memory prototype.
      * field in: quality, itemlevel, requiredlevel, class, subclass, inventorytype, armor,
      * delay, statscount, displayid, bonding, sheath, material, dmg_min, dmg_max, buyprice,
-     * sellprice, maxdurability, allowableclass.
+     * sellprice, maxdurability, allowableclass, stackable, maxcount, flags, duration, foodtype.
      *
      * @param uint32 entry
      * @param string field
@@ -2527,6 +2527,11 @@ namespace LuaGlobalFunctions
         else if (f == "sellprice")      p->SellPrice = v;
         else if (f == "maxdurability")  p->MaxDurability = v;
         else if (f == "allowableclass") p->AllowableClass = int32(value);
+        else if (f == "stackable")      p->Stackable = int32(value);
+        else if (f == "maxcount")       p->MaxCount = int32(value);
+        else if (f == "flags")          p->Flags = v;
+        else if (f == "duration")       p->Duration = v;
+        else if (f == "foodtype")       p->FoodType = v;
         else
         {
             E->Push(false);
@@ -2559,6 +2564,91 @@ namespace LuaGlobalFunctions
         for (size_t i = 0; i <= n; ++i)
             buf[i] = name.c_str()[i];
         p->Name1 = buf;
+        E->Push(true);
+        return 1;
+    }
+
+    /**
+     * Sets the description (yellow flavor text) of a loaded [Item] template's in-memory
+     * prototype. Heap-allocated like SetItemProtoName (small persistent leak, acceptable
+     * for a reserved custom-item pool).
+     *
+     * @param uint32 entry
+     * @param string description
+     * @return bool ok
+     */
+    int SetItemProtoDescription(Eluna* E)
+    {
+        uint32 entry = E->CHECKVAL<uint32>(1);
+        std::string text = E->CHECKVAL<std::string>(2);
+        ItemPrototype* p = const_cast<ItemPrototype*>(eObjectMgr->GetItemPrototype(entry));
+        if (!p)
+        {
+            E->Push(false);
+            return 1;
+        }
+        size_t n = text.size();
+        char* buf = new char[n + 1];
+        for (size_t i = 0; i <= n; ++i)
+            buf[i] = text.c_str()[i];
+        p->Description = buf;
+        E->Push(true);
+        return 1;
+    }
+
+    /**
+     * Sets one spell slot (0-based) on a loaded [Item] template's in-memory prototype.
+     * trigger is ITEM_SPELLTRIGGER_* (0 = on use, 1 = on equip, 2 = chance on hit).
+     * charges -1 = consumed on use (one charge, item destroyed for consumables);
+     * 0 = unlimited uses. spellId 0 clears the slot.
+     *
+     * @param uint32 entry
+     * @param uint32 slot : 0..4
+     * @param uint32 spellId
+     * @param uint32 trigger = 0
+     * @param int32 charges = -1
+     * @param int32 cooldown = -1 : ms, -1 = spell default
+     * @param uint32 category = 0
+     * @param int32 categoryCooldown = -1
+     * @return bool ok
+     */
+    int SetItemProtoSpell(Eluna* E)
+    {
+        uint32 entry   = E->CHECKVAL<uint32>(1);
+        uint32 slot    = E->CHECKVAL<uint32>(2);
+        uint32 spellId = E->CHECKVAL<uint32>(3);
+        uint32 trigger = E->CHECKVAL<uint32>(4, 0);
+        int32  charges = E->CHECKVAL<int32>(5, -1);
+        int32  cooldown = E->CHECKVAL<int32>(6, -1);
+        uint32 category = E->CHECKVAL<uint32>(7, 0);
+        int32  categoryCd = E->CHECKVAL<int32>(8, -1);
+        ItemPrototype* p = const_cast<ItemPrototype*>(eObjectMgr->GetItemPrototype(entry));
+        if (!p || slot >= MAX_ITEM_PROTO_SPELLS)
+        {
+            E->Push(false);
+            return 1;
+        }
+        _Spell& s = p->Spells[slot];
+        if (spellId == 0)
+        {
+            s.SpellId = 0;
+            s.SpellTrigger = 0;
+            s.SpellCharges = 0;
+            s.SpellPPMRate = 0.0f;
+            s.SpellCooldown = -1;
+            s.SpellCategory = 0;
+            s.SpellCategoryCooldown = -1;
+        }
+        else
+        {
+            s.SpellId = spellId;
+            s.SpellTrigger = trigger;
+            s.SpellCharges = charges;
+            s.SpellPPMRate = 0.0f;
+            s.SpellCooldown = cooldown;
+            s.SpellCategory = category;
+            s.SpellCategoryCooldown = categoryCd;
+        }
         E->Push(true);
         return 1;
     }
@@ -3274,6 +3364,8 @@ namespace LuaGlobalFunctions
         { "SetItemProtoStat", &LuaGlobalFunctions::SetItemProtoStat },
         { "SetItemProtoField", &LuaGlobalFunctions::SetItemProtoField },
         { "SetItemProtoName", &LuaGlobalFunctions::SetItemProtoName },
+        { "SetItemProtoDescription", &LuaGlobalFunctions::SetItemProtoDescription },
+        { "SetItemProtoSpell", &LuaGlobalFunctions::SetItemProtoSpell },
 
         // unimplemented
         { "WorldDBQueryAsync", METHOD_REG_NONE },
