@@ -230,6 +230,27 @@ uint64 EventMgr::CreateObjectProcessor(WorldObject* obj)
 #else
     uint64 id = obj->GetObjectGuid().GetRawValue();
 #endif
+    // One processor per object, reused by every RegisterEvent on it. This
+    // used to allocate a fresh processor per call: when the guid already had
+    // one, emplace failed and freed it while `processors` kept the raw
+    // pointer -> UpdateProcessors ran freed memory (mangosd segfaults in
+    // ElunaEventProcessor::Update / QueueDeferredOp, 2026-10-30).
+    auto existing = objectProcessors.find(id);
+    if (existing != objectProcessors.end())
+    {
+        ElunaEventProcessor* p = existing->second.get();
+        if (p->pendingDeletion)
+        {
+            // same guid back in the world (respawn) before cleanup ran:
+            // drop the old timers, keep the processor for the new object
+            p->SetStates(LUAEVENT_STATE_ERASE);
+            p->pendingDeletion = false;
+            objectProcessorsPendingDelete.erase(id);
+        }
+        p->obj = obj;
+        return id;
+    }
+
     auto proc = std::make_unique<ElunaEventProcessor>(this, obj);
     ElunaEventProcessor* raw = proc.get();
 

@@ -129,6 +129,9 @@ void Eluna::OnAddToWorld(GameObject* pGameObject)
 
 void Eluna::OnRemoveFromWorld(GameObject* pGameObject)
 {
+    // its RegisterEvent timers die with it (the processor kept a dangling obj)
+    if (eventMgr)
+        eventMgr->FlagObjectProcessorForDeletion(pGameObject->GetObjectGuid().GetRawValue());
     START_HOOK(GAMEOBJECT_EVENT_ON_REMOVE, pGameObject->GetEntry());
     HookPush(pGameObject);
     CallAllFunctions(binding, key);

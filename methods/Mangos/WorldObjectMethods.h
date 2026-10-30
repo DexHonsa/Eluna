@@ -803,9 +803,11 @@ namespace LuaWorldObject
     {
         int eventId = E->CHECKVAL<int>(2);
 
+        // this object's timers only (SetEventState hit every processor)
         if (E && E->eventMgr)
         {
-            E->eventMgr->SetEventState(eventId, LUAEVENT_STATE_ABORT);
+            if (ElunaEventProcessor* proc = E->eventMgr->GetObjectProcessor(obj->GetObjectGuid().GetRawValue()))
+                proc->SetState(eventId, LUAEVENT_STATE_ABORT);
         }
         return 0;
     }
@@ -816,9 +818,12 @@ namespace LuaWorldObject
      */
     int RemoveEvents(Eluna* E, WorldObject* obj)
     {
+        // this object's timers only: SetAllEventStates aborted EVERY timer in
+        // the state, global CreateLuaEvent ticks included
         if (E && E->eventMgr)
         {
-            E->eventMgr->SetAllEventStates(LUAEVENT_STATE_ABORT);
+            if (ElunaEventProcessor* proc = E->eventMgr->GetObjectProcessor(obj->GetObjectGuid().GetRawValue()))
+                proc->SetStates(LUAEVENT_STATE_ABORT);
         }
         return 0;
     }

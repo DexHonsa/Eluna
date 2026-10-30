@@ -9,6 +9,7 @@
 #include "LuaEngine.h"
 #include "BindingMap.h"
 #include "ElunaIncludes.h"
+#include "ElunaEventMgr.h"
 #include "ElunaTemplate.h"
 
 using namespace Hooks;
@@ -77,6 +78,9 @@ void Eluna::OnAddToWorld(Creature* pCreature)
 
 void Eluna::OnRemoveFromWorld(Creature* pCreature)
 {
+    // its RegisterEvent timers die with it (the processor kept a dangling obj)
+    if (eventMgr)
+        eventMgr->FlagObjectProcessorForDeletion(pCreature->GetObjectGuid().GetRawValue());
     START_HOOK(CREATURE_EVENT_ON_REMOVE, pCreature);
     HookPush(pCreature);
     CallAllFunctions(CreatureEventBindings, CreatureUniqueBindings, entry_key, unique_key);
